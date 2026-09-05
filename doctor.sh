@@ -81,8 +81,12 @@ run_capped() {   # $1=秒上限,其余=命令;超时则杀掉并返回 1
   cat "$tmp"; rm -f "$tmp"; return 0
 }
 
+# 自测钩子:DOC_FAKE_BTM=<文件> 用假 dump 走完全部分支(disallowed / allowed / 显示名 caffeinate),
+# DOC_FAKE_BTM=SLOW 模拟 sfltool 卡死。不用真去关登录项就能验。
 BTM_DUMP=""; BTM_SLOW=0
-if command -v sfltool >/dev/null 2>&1; then
+if [ -n "${DOC_FAKE_BTM:-}" ]; then
+  if [ "$DOC_FAKE_BTM" = "SLOW" ]; then BTM_SLOW=1; else BTM_DUMP=$(cat "$DOC_FAKE_BTM" 2>/dev/null); fi
+elif command -v sfltool >/dev/null 2>&1; then
   BTM_DUMP=$(run_capped 8 sfltool dumpbtm) || { BTM_SLOW=1; BTM_DUMP=""; }
 fi
 

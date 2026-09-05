@@ -15,7 +15,13 @@ description: 把一台 Mac 配成「手机上随时能开工的远程工位」�
 | `setup_remote.sh` | 一键装工位 + 看门狗 | **默认预览**,加 `--apply` 才动手 |
 | `remote_watchdog.sh` | 看门狗本体(由 setup 自动安装,一般不用手动碰) | 自动发现,零配置 |
 
-自测钩子(不用真造故障就能验全部分支):`WD_DRY_RUN=1` 只判定不动手、`WD_VERBOSE=1` 打印发现过程、`WD_FAKE_IMAGE=<路径>` 模拟映像状态、`WD_FAKE_LOG=<路径>` 用临时日志验 ENOENT 兜底。
+自测钩子(不用真造故障就能验全部分支):
+
+- 看门狗:`WD_DRY_RUN=1` 只判定不动手、`WD_VERBOSE=1` 打印发现过程、`WD_FAKE_IMAGE=<路径>` 模拟映像状态、`WD_FAKE_LOG=<路径>` 用临时日志验 ENOENT 兜底。
+- 体检:`DOC_FAKE_BTM=testdata/btm_fixture.txt bash doctor.sh` 走完登录项的三条分支
+  (disallowed 报错 / allowed 放行 / 显示名还是 caffeinate 的迁移提示);
+  `DOC_FAKE_BTM=SLOW bash doctor.sh` 模拟 `sfltool` 卡死,验超时兜底。
+  **别为了测这个真去关一次登录项** —— 关掉是持久的,要手工 bootstrap 才能拉回来。
 
 **执行顺序永远是**:先 `doctor.sh` 看现状 → 再 `setup_remote.sh`(先不加 --apply 给用户看预览)→ 用户确认后 `--apply` → 最后再 `doctor.sh` 验收。
 

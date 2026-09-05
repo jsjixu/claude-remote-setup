@@ -1,0 +1,35 @@
+ #20:
+                 UUID: EAFC4FA5-CD08-47F2-BC22-27452A6E4E87
+                 Name: bash
+       Developer Name: (null)
+                 Type: legacy agent (0x10008)
+          Disposition: [enabled, allowed, notified] (0xb)
+           Identifier: 8.com.jsjixu.claude-remote-watchdog
+                  URL: file:///Users/jsjixu/Library/LaunchAgents/com.jsjixu.claude-remote-watchdog.plist
+      Executable Path: /bin/bash
+           Generation: 3
+    Parent Identifier: Unknown Developer
+
+ #21:
+                 UUID: 5EA16A52-C314-4B17-98E0-F00D720452D3
+                 Name: claude
+       Developer Name: Anthropic PBC
+      Team Identifier: Q6L2SF6YDW
+                 Type: legacy agent (0x10008)
+                Flags: [ legacy ] (0x1)
+          Disposition: [enabled, disallowed, notified] (0x9)
+           Identifier: 8.com.jsjixu.claude-remote-vm
+                  URL: file:///Users/jsjixu/Library/LaunchAgents/com.jsjixu.claude-remote-vm.plist
+      Executable Path: /Users/jsjixu/.local/bin/claude
+    Parent Identifier: Anthropic PBC
+
+ #22:
+                 UUID: D2F00FC3-007A-4F7D-8EE4-8EF00FC5922B
+                 Name: caffeinate
+       Developer Name: Apple
+                 Type: legacy agent (0x10008)
+          Disposition: [enabled, allowed, notified] (0xb)
+           Identifier: 8.com.jsjixu.claude-remote-vm-LightPlan
+                  URL: file:///Users/jsjixu/Library/LaunchAgents/com.jsjixu.claude-remote-vm-LightPlan.plist
+      Executable Path: /usr/bin/caffeinate
+    Parent Identifier: Apple
