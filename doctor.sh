@@ -59,6 +59,43 @@ if [ -f "$HOME/.claude.json" ]; then ok "已登录过(找到 ~/.claude.json)"
 else bad "没找到 ~/.claude.json —— 先在终端裸跑一次 claude 完成登录"; fi
 
 hd "2. 远程工位(daemon)"
+
+# ── BTM(系统设置 → 通用 → 登录项与扩展)状态 ────────────────────────────────
+# 为什么要查这个:被用户在登录项里关掉的工位,**当下进程可能还在跑**(手工 bootstrap 过),
+# 只查 PID 一切正常 —— 但 macOS 已把 Disposition 记成 disallowed,**下次登录不会再起**。
+# 这是一个「今天看着好好的、明天开机就没了」的哑故障,只有查 BTM 才看得见。
+# sfltool 不需要 sudo,但**耗时不可预测**(它对每个后台项做签名校验,实测有时 >2 分钟)
+# —— 必须加硬超时,否则整个体检会卡死在这一步。查不到就明说并给手查命令,绝不假装没事。
+run_capped() {   # $1=秒上限,其余=命令;超时则杀掉并返回 1
+  local cap="$1"; shift
+  local tmp; tmp=$(mktemp) || return 1
+  "$@" >"$tmp" 2>/dev/null &
+  local p=$! i=0
+  while kill -0 "$p" 2>/dev/null; do
+    sleep 0.2; i=$((i+1))
+    if [ "$i" -ge $((cap*5)) ]; then
+      kill -9 "$p" 2>/dev/null; wait "$p" 2>/dev/null; rm -f "$tmp"; return 1
+    fi
+  done
+  wait "$p" 2>/dev/null
+  cat "$tmp"; rm -f "$tmp"; return 0
+}
+
+BTM_DUMP=""; BTM_SLOW=0
+if command -v sfltool >/dev/null 2>&1; then
+  BTM_DUMP=$(run_capped 8 sfltool dumpbtm) || { BTM_SLOW=1; BTM_DUMP=""; }
+fi
+
+btm_field() {   # $1=label  $2=Disposition|Name  → 打印该字段,取不到则空
+  [ -n "$BTM_DUMP" ] || return 0
+  printf '%s\n' "$BTM_DUMP" | awk -v want="8.$1" -v key="$2" '
+    $0 ~ ("^[[:space:]]*" key ":") { v=$0; sub("^[[:space:]]*" key ":[[:space:]]*","",v) }
+    /^[[:space:]]*Identifier:/ {
+      id=$0; sub(/^[[:space:]]*Identifier:[[:space:]]*/,"",id)
+      if (id==want && v!="") { print v; exit }
+    }'
+}
+
 JOBS=$(discover_jobs); NJOB=0
 if [ -z "$JOBS" ]; then
   bad "一个常驻工位都没有 —— 手机上无法「新建」会话"
@@ -71,11 +108,43 @@ else
     PID=$(launchctl list 2>/dev/null | awk -v x="$L" '$3==x{print $1}')
     echo "  ▸ ${L}"
     info "手机上显示: ${NM:-?}"
+    DISP=$(btm_field "$L" "Disposition")
     if [ -z "$PID" ]; then
       bad "没在运行"
+      case "$DISP" in
+        *disallowed*)
+          info "真因已确认:它在「登录项与扩展」里被关掉了(BTM: ${DISP})"
+          ;;
+        *)
+          info "头号嫌疑:被「登录项与扩展」关掉了 —— plist 还在、job 却整个不在 launchctl list 里,"
+          info "         这正是 BTM 关掉一个后台项时的样子(launchd 会 removing service)"
+          ;;
+      esac
+      info "先去 UI 里确认那一项是开着的: open \"x-apple.systempreferences:com.apple.LoginItems-Settings.extension\""
+      info "再拉起来: launchctl bootstrap gui/$(id -u) ${LA}/${L}.plist"
       continue
     fi
     ok "运行中 (PID ${PID})"
+
+    # 进程在跑 ≠ 明天还在。被关过的项,重启后就没了
+    case "$DISP" in
+      *disallowed*)
+        bad "★但它在「登录项与扩展」里是关着的★ (BTM: ${DISP})"
+        info "现在能跑只是因为有人手工 bootstrap 过 —— **下次登录/重启不会自启**"
+        info "去打开它: open \"x-apple.systempreferences:com.apple.LoginItems-Settings.extension\""
+        info "(这个开关是用户同意闸,没有命令行接口;launchctl enable 管的是另一套列表)"
+        ;;
+      *allowed*) ok "登录项已允许(重启后会自启)" ;;
+      "")        : ;;
+    esac
+
+    # 显示名叫 caffeinate 的老工位:极易被当成 Caffeine.app 残留误关
+    case "$(btm_field "$L" "Name")" in
+      caffeinate)
+        warn "它在登录项里显示成「caffeinate」—— 和第三方 Caffeine.app 残留难以区分,极易被误关"
+        info "建议摘掉 plist 里 /usr/bin/caffeinate 那两行(新版本已不再生成),改显示成 claude"
+        ;;
+    esac
     if [ "$NATIVE" = 1 ]; then
       IMG=$(image_of "$PID")
       if [ -z "$IMG" ]; then
@@ -98,6 +167,11 @@ else
       info "日志 ${SZ}$([ "${NE:-0}" -gt 0 ] && echo "  (历史上有 ${NE} 次 ENOENT 故障记录)")"
     fi
   done <<< "$JOBS"
+  if [ "${BTM_SLOW:-0}" = "1" ]; then
+    warn "登录项(BTM)状态这次没查成 —— sfltool dumpbtm 超过 8 秒没返回(它有时就是这么慢)"
+    info "手查: sfltool dumpbtm | grep -B12 \"Identifier: 8.<label>\$\" | grep -E \"Name:|Disposition:\""
+    info "看到 disallowed = 它被在「登录项与扩展」里关掉了,下次登录不会自启"
+  fi
 fi
 
 hd "3. 看门狗"

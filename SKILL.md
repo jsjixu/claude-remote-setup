@@ -1,6 +1,6 @@
 ---
 name: claude-remote-setup
-description: 把一台 Mac 配成「手机上随时能开工的远程工位」——装常驻 remote-control daemon、防睡眠、装看门狗防「手机新建会话永远卡在 Allocating sandbox」这个必犯的坑,并出体检报告。当用户说「想用手机控制电脑上的 Claude Code」「iOS/Claude App 连不上我的 Mac」「怎么远程控制」「手机上开不了会话」「新建会话一直转圈/卡在 Allocating sandbox」「远程工位怎么配」「出门也想跑 Claude」时用(关键词:手机远程/iOS 远程控制/Claude App/remote control/远程工位/连不上/开不了会话/Allocating sandbox/一直转圈/7x24)。含三个可直接跑的脚本。已在真机验证。
+description: 把一台 Mac 配成「手机上随时能开工的远程工位」——装常驻 remote-control daemon、防睡眠、装看门狗防「手机新建会话永远卡在 Allocating sandbox」这个必犯的坑,并出体检报告。当用户说「想用手机控制电脑上的 Claude Code」「iOS/Claude App 连不上我的 Mac」「怎么远程控制」「手机上开不了会话」「新建会话一直转圈/卡在 Allocating sandbox」「远程工位怎么配」「出门也想跑 Claude」「工位/机器在手机上突然不见了」「重启后远控就没了」「登录项里那个 caffeinate 是什么」时用(关键词:手机远程/iOS 远程控制/Claude App/remote control/远程工位/连不上/开不了会话/Allocating sandbox/一直转圈/7x24/工位消失/登录项与扩展/Login Items/BTM/disallowed/重启后不自启/多个项目多个工位)。含三个可直接跑的脚本。已在真机验证。
 ---
 
 # 把 Mac 配成手机能随时开工的远程工位
@@ -66,12 +66,20 @@ bash setup_remote.sh --name mymac --dir ~/你的项目 --mode default --apply  #
 - `--name` 手机上显示的名字,只能字母数字和 `-_`
 - `--dir` 工作目录(默认当前目录)。**新会话都在这个目录里创建**
 - `--mode` 权限档位:`default`(推荐给新手,写操作会问)/ `acceptEdits` / `auto` / `bypassPermissions`(危险,别给新手)
+- `--effort` 思考档位:`low`/`medium`/`high`/`xhigh`,写进 `CLAUDE_CODE_EFFORT_LEVEL`。
+  **`remote-control` 子命令不吃 `--effort`**(顶层 flag 塞进子命令会打乱解析,`--name` 变 unknown option → 崩溃重启循环),env 是唯一干净的持久杠杆。不给就按 `settings.json` 的默认档。`max` 只能靠交互式 CLI flag,写不进常驻配置。
 - `--no-watchdog` 跳过看门狗(**不建议**,理由见下)
 - `--watchdog-only` **已经有工位了,只补装/升级看门狗**(不新建工位)
 - `--list` 看已装了哪些工位;`--uninstall <label> --apply` 卸掉
 
 一个工位 = 一个目录。**想在多个项目里开工,就装多个工位**(名字不同即可) ——
 因为 daemon 只在自己的 WorkingDirectory 里创建会话,手机端的目录选择器也只列该 daemon 有过历史的目录。
+
+**别在这上面浪费时间的两条**(都实测过):
+- 把新目录写进 `~/.claude.json` 的 `projects`(连 `hasTrustDialogAccepted` 一起)再重启 daemon,
+  手机端目录列表**依然不会多出来** —— 远控不看那个文件。
+- 想用 `claude -p` 在那个目录里造一次会话历史来「注册」它:ssh 非交互会话里会报 `Not logged in`
+  (拿不到 GUI 域的 keychain)。多工位就得多 daemon,没有捷径。
 
 ### 3.5 已经有工位、只想补装看门狗
 用户如果之前手工配过 daemon(或用旧办法装过),不用推倒重来:
@@ -135,11 +143,51 @@ launchctl kickstart -k gui/$(id -u)/<label>
 
 **为什么不能图省事把定时器加在 daemon 自己的 plist 上**:daemon 是 `KeepAlive=true` 的常驻进程,launchd 定时触发的语义是「到点了如果**没跑**就拉起来」,对已在运行的 job 是 no-op,根本不会重启它。必须用独立的看门狗 job。
 
+## ★★ 第二个坑:工位被「登录项与扩展」误关(2026-09-05 真机踩过)
+
+**症状**:手机上这台机器突然整个不见了 / 目录选择器空了;电脑上 `launchctl list` 里那个 label
+**连条目都没有**(不是「未运行」,是被 removing service 了)。plist 文件还在。
+
+**真因**:macOS 的 BTM(系统设置 → 通用 → 登录项与扩展)给每个后台项显示的名字,
+取自 `ProgramArguments[0]` 的可执行文件名。老版本的本脚本用 `/usr/bin/caffeinate` 包一层,
+于是每个工位在那个列表里都显示成 **`caffeinate`**、归属 Apple —— 和第三方 Caffeine.app 的残留
+长得一模一样。用户清理登录项时关掉它是完全合理的判断,而**一关就是**:
+
+```
+backgroundtaskmanagementd  getItemWithIdentifier: 8.com.<user>.claude-remote-<name>
+launchd                    removing service: com.<user>.claude-remote-<name>
+```
+
+而且这个「关」是**持久**的:BTM 把 Disposition 记成 `[enabled, disallowed, notified]`,
+**下次登录也不会再起**。手工 `launchctl bootstrap` 能把它拉起来,但重启后照样没有。
+
+**确诊**(不用猜):
+```bash
+sfltool dumpbtm | grep -B12 "Identifier: 8.com.<user>.claude-remote-<name>$" | grep -E "Name:|Disposition"
+# Disposition: [enabled, disallowed, ...] = 被用户关过
+/usr/bin/log show --last 1h --predicate 'eventMessage CONTAINS "claude-remote"' --style compact | grep -i "removing service"
+```
+⚠️ 用 `/usr/bin/log` 绝对路径 —— 有些 shell 里 `log` 是个同名函数,直接写 `log show` 会静默失败
+(报 `too many arguments`,然后你以为「日志里什么都没有」)。
+
+**修**:
+1. 摘掉 plist 里的 caffeinate 两行(新版脚本已不再生成),重新 bootstrap
+   → 该项在登录项里改显示成 `claude`、归属 **Anthropic PBC**,一眼认得出,不会再被误杀。
+2. **`disallowed` 这个标记只能在系统设置 UI 里翻回来**(它是用户同意闸,没有命令行接口;
+   `launchctl enable` 管的是另一套 disabled 列表,不是这个)。
+   `open "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"` 打开那一页,
+   把 Anthropic PBC 名下的 `claude` 项打开。
+3. `sfltool resetbtm` 能清干净,但它**重置全机所有后台项**,别用。
+
+**给新工位起名时也记着这条**:能让人在登录项里认出来的名字,比好看的名字重要。
+
 ## 排障速查
 
 | 症状 | 多半是 | 怎么办 |
 |---|---|---|
 | 手机上根本看不到这台机器 | daemon 没跑 / 没登录 / 账号不同 | `bash doctor.sh` |
+| 机器/目录**突然整个消失**,plist 还在但 `launchctl list` 里没这个 label | **被「登录项与扩展」关掉了**(见上一节) | 去系统设置打开那一项,再 `launchctl bootstrap` |
+| 现在能连,**重启后就没了** | 同上:BTM 记着 `disallowed`,手工 bootstrap 只治当下 | 同上 —— 这个开关只能在 UI 里翻 |
 | 看得到机器,New session 卡 `Allocating sandbox` | **上面那个版本映像坑** | `launchctl kickstart -k gui/$(id -u)/<label>`,然后装看门狗 |
 | 白天能连,晚上连不上 | 电脑睡了 | `sudo pmset -c sleep 0`;笔记本换台式机 |
 | 出门就断,回家又好 | 笔记本合盖了 / 拔了电 | 换常插电的机器当工位 |

@@ -4,6 +4,7 @@
 #
 #   ./setup_remote.sh --name mymac                    # 预览要做什么(默认不动手)
 #   ./setup_remote.sh --name mymac --apply            # 真的装
+#   ./setup_remote.sh --name mymac --effort xhigh --apply   # 顺便定思考档位
 #   ./setup_remote.sh --watchdog-only --apply         # 已有工位,只补装/升级看门狗
 #   ./setup_remote.sh --list                          # 看已装了哪些工位
 #   ./setup_remote.sh --uninstall <label> --apply     # 卸掉某个工位
@@ -15,7 +16,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
-NAME=""; DIR="$PWD"; MODE="default"; APPLY=0; ACTION="install"; TARGET=""
+NAME=""; DIR="$PWD"; MODE="default"; APPLY=0; ACTION="install"; TARGET=""; EFFORT=""
 WATCHDOG=1; INTERVAL=180
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LA="$HOME/Library/LaunchAgents"
@@ -29,6 +30,7 @@ while [ $# -gt 0 ]; do
     --name) NAME="${2:-}"; shift 2 ;;
     --dir) DIR="${2:-}"; shift 2 ;;
     --mode) MODE="${2:-}"; shift 2 ;;
+    --effort) EFFORT="${2:-}"; shift 2 ;;
     --interval) INTERVAL="${2:-}"; shift 2 ;;
     --apply) APPLY=1; shift ;;
     --no-watchdog) WATCHDOG=0; shift ;;
@@ -219,13 +221,31 @@ info "手机上显示的名字: $NAME"
 info "launchd label:    $LABEL"
 info "工作目录:         $DIR"
 info "权限档位:         $MODE"
+[ -n "$EFFORT" ] && info "思考档位:         $EFFORT(写进 CLAUDE_CODE_EFFORT_LEVEL)"
 info "日志:             $DLOG"
 if [ -f "$PLIST" ]; then
   warn "同名工位已存在,继续会覆盖: $PLIST"
 fi
 
+# remote-control 子命令**不吃 `--effort`**(它只认顶层 flag,塞进子命令会打乱解析,
+# --name 会变成 unknown option → 崩溃重启循环)。环境变量是唯一干净的持久杠杆。
+# 留空则不写这一项,会话按 settings.json 里的默认档跑。
+EFFORT_XML=""
+if [ -n "$EFFORT" ]; then
+  case "$EFFORT" in
+    low|medium|high|xhigh) ;;
+    *) echo "  ⚠️  --effort 只认 low/medium/high/xhigh(max 只能靠 CLI flag,写不进常驻配置),已忽略"; EFFORT="" ;;
+  esac
+fi
+[ -n "$EFFORT" ] && EFFORT_XML="
+        <key>CLAUDE_CODE_EFFORT_LEVEL</key>
+        <string>$EFFORT</string>"
+
 step "3/6 生成 daemon 配置"
 TMP_PLIST=$(mktemp)
+# ⚠️ 这个 heredoc 是 **unquoted** 的(要展开 $LABEL/$NAME/$CLAUDE 等)。所以下面的 XML 注释里
+#    **不能出现反引号**(会被当成命令替换真的执行掉,内容还会从注释里消失)、`$` 也要小心。
+#    踩过:注释里写 `sudo pmset -c sleep 0` → 生成时真去跑了一次 sudo,注释里只剩两个空格。
 cat > "$TMP_PLIST" <<PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -235,11 +255,23 @@ cat > "$TMP_PLIST" <<PLISTEOF
     <string>$LABEL</string>
 
     <!-- 手机 Claude App 里认名字「${NAME}」,点进去就能在这台机器上新建会话。
-         caffeinate -s: 插电时阻止空闲睡眠(电池供电时不生效,这是 macOS 的规矩)。 -->
+
+         ★ 这里**故意不用 /usr/bin/caffeinate 包一层**(2026-09-05 真机踩过,代价是两个工位被误杀):
+         系统设置 → 通用 → 登录项与扩展 里,每个后台项显示的名字取自 ProgramArguments[0]。
+         包了 caffeinate,这一项就显示成「caffeinate」、归属 Apple —— 和第三方 Caffeine.app 的
+         残留一模一样。用户清理登录项时把它关掉是完全合理的判断,而**关掉 = BTM 标记
+         disallowed = launchd 立刻 removing service,且下次登录也不会再起**,手机端直接失联。
+         直接跑 claude 则显示成「claude」、归属 Anthropic PBC,一眼认得出。
+
+         代价:少了一层插电防睡眠。这不亏 —— 第 6 步那条 sudo pmset -c sleep 0 才是真正管用的
+         那道(caffeinate -s 本来也只在插电时生效),doctor.sh 每次都会检查它;要按需防睡眠用
+         Amphetamine 之类。
+
+         另:ProgramArguments 必须同时含 claude 和 remote-control —— 看门狗靠这两个词自动发现
+         工位。想换成脚本包装来「起个好名字」的话,看门狗会漏掉它,那个「手机卡 Allocating
+         sandbox」的坑就回来了。 -->
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/caffeinate</string>
-        <string>-s</string>
         <string>$CLAUDE</string>
         <string>remote-control</string>
         <string>--name</string>
@@ -256,7 +288,7 @@ cat > "$TMP_PLIST" <<PLISTEOF
         <key>PATH</key>
         <string>/opt/homebrew/bin:$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>HOME</key>
-        <string>$HOME</string>
+        <string>$HOME</string>$EFFORT_XML
     </dict>
 
     <!-- 登录即起 + 崩了自动重来;15s 节流防疯转 -->
@@ -308,7 +340,7 @@ else
 fi
 if [ "$IS_LAPTOP" = 1 ]; then
   warn "这是笔记本。两个额外提醒:"
-  warn "  · 用电池时上面的设置不生效(caffeinate -s 也只在插电时挡睡眠)"
+  warn "  · 用电池时上面的设置不生效(pmset 的 AC 档只管插电)"
   warn "  · 合盖基本等于断线。想真正 7x24,用一台常插电的台式机(如 Mac mini)当工位"
 fi
 if [ "$IS_LAPTOP" = 0 ]; then

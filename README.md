@@ -1,15 +1,21 @@
 # claude-remote-setup
 
 把一台 Mac 配成「手机上随时能开工的远程工位」——装常驻 `claude remote-control` daemon、
-防睡眠、并根治一个**必然会犯、但完全没有提示**的坑:手机上新建会话永远卡在 `Allocating sandbox`。
+防睡眠,并根治**两个都没有任何提示**的坑:
+
+1. 手机上新建会话永远卡在 `Allocating sandbox`(Claude 自动升级后 daemon 抱着已被删掉的旧版本)
+2. 工位**在「登录项与扩展」里被自己误关**,而且是持久的 —— 今天还好好的,重启后就没了
 
 > **EN**: A Claude Code skill (+ 3 standalone bash scripts) that turns a Mac into a 7×24 remote
-> workstation you can drive from the Claude mobile app. It also fixes a silent failure mode where
-> the long-running `remote-control` daemon keeps a deleted binary path after Claude auto-updates,
-> so every new session from your phone hangs on "Allocating sandbox" forever with no error shown.
-> Docs and script comments are in Chinese.
+> workstation you can drive from the Claude mobile app. It fixes two silent failure modes:
+> (1) after Claude auto-updates, the long-running `remote-control` daemon still points at the
+> deleted binary, so every new session from your phone hangs on "Allocating sandbox" with no error;
+> (2) wrapping the agent in `/usr/bin/caffeinate` makes it show up as "caffeinate" in
+> Login Items & Extensions — indistinguishable from leftovers of the third-party Caffeine app —
+> so people turn it off, which permanently disables it (macOS records `disallowed`; it won't come
+> back after reboot, and there is no CLI to undo it). Docs and script comments are in Chinese.
 
-## 它解决的那个坑
+## 第一个坑:手机卡「Allocating sandbox」
 
 常驻的 `claude remote-control` daemon 一跑就是几周不重启。期间 Claude Code 自动升级
 (`~/.local/bin/claude` 软链改指新版本),旧版本文件随后被清理删掉。
@@ -26,6 +32,33 @@ daemon 自己**还活着**(映像早加载进内存了),但它 spawn 新会话�
 ```bash
 grep -a "spawn error: ENOENT" ~/Library/Logs/claude-remote-*.log | tail -3
 ```
+
+## 第二个坑:工位被「登录项与扩展」误关
+
+macOS 的 BTM 给「系统设置 → 通用 → 登录项与扩展」里每个后台项显示的名字,取自
+`ProgramArguments[0]` 的可执行文件名。**如果你用 `/usr/bin/caffeinate` 包一层来防睡眠**
+(很多教程这么写,本仓库早期版本也是),那这个工位在那个列表里就显示成 **`caffeinate`**、
+归属 Apple —— 和第三方 Caffeine.app 的残留长得一模一样。
+
+清理登录项的人关掉它是完全合理的判断,而一关:
+
+```
+backgroundtaskmanagementd  getItemWithIdentifier: 8.com.<user>.claude-remote-<name>
+launchd                    removing service: com.<user>.claude-remote-<name>
+```
+
+**而且这是持久的** —— BTM 把 Disposition 记成 `[enabled, disallowed, notified]`,
+手工 `launchctl bootstrap` 能把它拉起来,但**下次登录还是不会自启**,
+而 `doctor.sh` 只查「进程在不在跑」的话会报一切正常。这是一个「今天好好的、明天开机就没」的哑故障。
+
+**本仓库的做法**:生成的 plist **不包 caffeinate**,直接跑 `claude` ——
+在登录项里显示成 `claude`、归属 **Anthropic PBC**,一眼认得出。
+防睡眠交给 `sudo pmset -c sleep 0`(`caffeinate -s` 本来也只在插电时生效),`doctor.sh` 每次都查它。
+`doctor.sh` 另外会读 BTM 状态,`disallowed` 直接报错并给出打开它的命令。
+
+> ⚠️ 两个注意:`sfltool dumpbtm` **耗时不可预测、甚至会无限阻塞**(实测),所以 `doctor.sh`
+> 给它加了 8 秒硬超时,超时就给手查命令而不是卡死;另外 `disallowed` 这个标记
+> **只能在系统设置 UI 里翻回来**,没有命令行接口(`launchctl enable` 管的是另一套列表)。
 
 ## 快速开始
 
